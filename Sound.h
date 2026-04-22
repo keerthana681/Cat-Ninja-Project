@@ -23,5 +23,6 @@ void Sound_Stop(void);
 void Sound_Sad(void);       // sad music, loops until Sound_Stop()
 void Sound_Meow(void);      // short meow, plays once
 void Sound_Explosion(void); // bomb explosion, plays once
+void Sound_Slice(void);     // fruit slice, plays once
 
 #endif

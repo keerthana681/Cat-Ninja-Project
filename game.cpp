@@ -81,6 +81,7 @@ static uint8_t  Lives           = 3;
 static const uint8_t MENU_NONE  = 0xFF;
 static uint32_t LCD2ScoreShadow = 0xFFFFFFFF;
 static uint8_t  LCD2LivesShadow = 0xFF;
+static uint8_t  LCD2LevelShadow = 0xFF;
 static const uint8_t LCD2Enabled = 1;
 static uint8_t  LCD2MsgTimer   = 0;
 
@@ -139,6 +140,7 @@ static void Collision_Check(void);
 static void Title_DrawLogo(uint8_t frame);
 static void Title_AnimateLogo(void);
 static void DrawBitmapMasked(int16_t x, int16_t y, const uint16_t *image, int16_t w, int16_t h);
+static uint8_t DifficultyLevel(void);
 
 // ── Inline helpers ─────────────────────────────────────────────────────────
 static const char* lang(const char* eng, const char* esp){
@@ -162,11 +164,28 @@ static int16_t MapAxis(uint32_t s, int16_t outMax){
 // ── LCD2 helpers ───────────────────────────────────────────────────────────
 static void LCD2_UpdateGameplayStatus(void){
     if(!LCD2Enabled){ LCD1_Select(); return; }
-    if(LCD2ScoreShadow == Score && LCD2LivesShadow == Lives){ LCD1_Select(); return; }
-    LCD2_ShowScore(Score);
-    LCD2_ShowLives(Lives);
-    LCD2ScoreShadow = Score;
-    LCD2LivesShadow = Lives;
+    uint8_t lv = DifficultyLevel();
+    bool scoreChanged = (LCD2ScoreShadow != Score || LCD2LivesShadow != Lives);
+    bool levelChanged = (LCD2LevelShadow != lv);
+    if(!scoreChanged && !levelChanged){ LCD1_Select(); return; }
+    if(scoreChanged){
+        LCD2_ShowScore(Score);
+        LCD2_ShowLives(Lives);
+        LCD2ScoreShadow = Score;
+        LCD2LivesShadow = Lives;
+    }
+    if(levelChanged){
+        LCD2_ShowLevel(lv);
+        if(LCD2LevelShadow != 0xFF && lv > LCD2LevelShadow){
+            // level-up notification on LCD1 event banner
+            char buf[16];
+            buf[0]='L'; buf[1]='V'; buf[2]='L'; buf[3]=' ';
+            buf[4]=(char)('0'+lv); buf[5]='!'; buf[6]=' '; buf[7]='U';
+            buf[8]='P'; buf[9]='!'; buf[10]='\0';
+            LCD2_ShowEventMsg(buf, 0xFFE0u, 60);  // yellow flash
+        }
+        LCD2LevelShadow = lv;
+    }
     LCD1_Select();
 }
 static void LCD2_ShowEventMsg(const char* msg, uint16_t color, uint8_t frames){
@@ -202,7 +221,7 @@ static void Cursor_Reset(int16_t x, int16_t y){
     BladeCursor.radius = (uint8_t)CURSOR_MAX_HALF_W;
 }
 static uint8_t Cursor_IsSlicing(void){
-    return (uint8_t)(Switch_In() & 0x01u);
+    return (uint8_t)(!(Switch_In() & 0x01u));
 }
 static void Cursor_Sample(void){
     Joystick_Read(&JoyX, &JoyY);
@@ -227,7 +246,7 @@ static uint8_t Cursor_IsHoveringSelectable(void){
     return 0;
 }
 static void Cursor_UpdateColor(void){
-    uint8_t held = (uint8_t)(Switch_In() & 0x01u);
+    uint8_t held = (uint8_t)(!(Switch_In() & 0x01u));
     if(held)                              CursorColor = ST7735_RED;
     else if(Cursor_IsHoveringSelectable()) CursorColor = ST7735_YELLOW;
     else                                  CursorColor = ST7735_CYAN;
@@ -256,11 +275,13 @@ static void Gameplay_DrawBorder(void){
 }
 
 static uint8_t DifficultyLevel(void){
-    uint8_t level = (uint8_t)(Score / 12U);
-    return (level > 6U) ? 6U : level;
+    // Level 0-9: one level per 10 points scored.
+    uint8_t level = (uint8_t)(Score / 10U);
+    return (level > 9U) ? 9U : level;
 }
 static uint8_t Fruit_SpawnChance(void){
-    return (uint8_t)(4U + DifficultyLevel());
+    // Spawn probability per frame (%): 3 at level 0, up to 21 at level 9.
+    return (uint8_t)(3U + DifficultyLevel() * 2U);
 }
 static uint8_t Fruit_ActiveCount(void){
     uint8_t count = 0;
@@ -272,7 +293,7 @@ static uint8_t Fruit_ActiveCount(void){
 static uint8_t Fruit_SpawnIsClear(uint8_t type, int16_t x, int16_t y){
     int16_t left = x;
     int16_t right = x + P[type].xp;
-    int16_t top = y - P[type].yp + 1;
+    int16_t top = y - P[type].yp + 1;   
     int16_t bottom = y;
     for(int i = 0; i < MAX_FRUITS; i++){
         if(!Fruits[i].active) continue;
@@ -314,11 +335,13 @@ static void Fruit_Update(void){
             int16_t spawnX;
             uint8_t t;
             uint8_t placed = 0;
-            if(Fruit_ActiveCount() >= (uint8_t)(3U + (level / 2U))) continue;
+            if(Fruit_ActiveCount() >= (uint8_t)(2U + (level / 2U) + 1U)) continue;
             if((rand() % 100) >= Fruit_SpawnChance()) continue;
+            // Bomb probability scales from 1-in-20 at level 0 to 5-in-20 at level 9.
+            uint8_t bombThresh = (uint8_t)(1U + level / 2U);
             int r = rand() % 20;
-            if     (r < 2) t = FRUIT_BOMB;
-            else if(r < 4) t = FRUIT_POMEGRANATE;
+            if     (r < (int)bombThresh) t = FRUIT_BOMB;
+            else if(r < (int)(bombThresh + 2)) t = FRUIT_POMEGRANATE;
             else           t = (uint8_t)((rand() % 3) * 2);  // 0, 2, or 4
             Fruits[i].type = t;
             Fruits[i].image = selection[t];
@@ -334,7 +357,7 @@ static void Fruit_Update(void){
             if(!placed) continue;
             Fruits[i].x = spawnX;
             Fruits[i].y = spawnY;
-            Fruits[i].vy = (int16_t)(-(8 + rand() % 4 + (level / 2)));
+            Fruits[i].vy = (int16_t)(-(7 + rand() % 4 + level));  // faster launch at higher levels
             Fruits[i].vx = (int16_t)((rand() % (5 + level)) - (2 + (level / 2)));
             Fruits[i].active = true; Fruits[i].sliced = false; Fruits[i].wasVisible = false;
             Fruits[i].hitCount = 0;  Fruits[i].deathTimer = 0; Fruits[i].slicedTimer = 0;
@@ -351,18 +374,19 @@ static void Fruit_Update(void){
         }
         if(!Fruits[i].active) continue;
 
-        // Pomegranate re-slice timer
-        if(Fruits[i].slicedTimer > 0){
-            Fruits[i].slicedTimer--;
-            if(Fruits[i].slicedTimer == 0 && Fruits[i].type == FRUIT_POMEGRANATE + 1){
-                Fruits[i].type   = FRUIT_POMEGRANATE;
-                Fruits[i].image  = selection[FRUIT_POMEGRANATE];
-                Fruits[i].sliced = false;
-            }
-        }
+        // // Pomegranate re-slice timer
+        // if(Fruits[i].slicedTimer > 0){
+        //     Fruits[i].slicedTimer--;
+        //     if(Fruits[i].slicedTimer == 0 && Fruits[i].type == FRUIT_POMEGRANATE + 1){
+        //         Fruits[i].type   = FRUIT_POMEGRANATE;
+        //         Fruits[i].image  = selection[FRUIT_POMEGRANATE];
+        //         Fruits[i].sliced = false;
+        //     }
+        // }
 
-        // Physics
-        if(GravCounter % 3 == 0) Fruits[i].vy++;
+        // Physics — gravity applies every 3rd frame at level 0, every 2nd at level 5+.
+        uint8_t gravMod = (DifficultyLevel() >= 5u) ? 2u : 3u;
+        if(GravCounter % gravMod == 0) Fruits[i].vy++;
         Fruits[i].x += Fruits[i].vx;
         Fruits[i].y += Fruits[i].vy;
 
@@ -396,7 +420,7 @@ static void DrawScanline(int16_t sy,
                          const uint16_t *img, int16_t x,
                          int16_t top, int16_t w, int16_t h){
     if(sy < top || sy > top + h - 1) return;
-    int16_t imgRow = sy - top;
+    int16_t imgRow = (h - 1) - (sy - top);
     const uint16_t *rp = &img[imgRow * w];
     int16_t col = 0;
     while(col < w){
@@ -441,7 +465,7 @@ static void Fruits_Draw(void){
 }
 
 static void Collision_Check(void){
-    if(!(Switch_In() & 0x01u)) return;  // top button must be held to slice
+    if(Switch_In() & 0x01u) return;  // button released (active-low) → not slicing
     int sliceCount = 0;
     for(int i = 0; i < MAX_FRUITS; i++){
         if(!Fruits[i].active || Fruits[i].sliced) continue;
@@ -454,6 +478,7 @@ static void Collision_Check(void){
         Fruits[i].hitCount++;
         if(Fruits[i].type == FRUIT_BOMB){
             Sound_Explosion();
+            Lives--;
             Fruits[i].type = FRUIT_BOOM; Fruits[i].image = selection[FRUIT_BOOM];
             Fruits[i].sliced = true; Fruits[i].deathTimer = EXPLODE_FRAMES;
             Fruits[i].vy = 0; Fruits[i].vx = 0;
@@ -464,6 +489,7 @@ static void Collision_Check(void){
             Fruits[i].sliced = true;
             Fruits[i].deathTimer = 0;
             Fruits[i].vy = (int16_t)(2 + (Abs16(Fruits[i].vy) / 3));
+            Sound_Slice();
             sliceCount++;
         }
     }
@@ -676,7 +702,8 @@ void Gameplay_Init(void){
     Trail_Init();
     Fruit_Init();
     Gameplay_DrawBorder();
-    LCD2ScoreShadow = 0xFFFFFFFFu; LCD2LivesShadow = 0xFF; LCD2MsgTimer = 0;
+    LCD2ScoreShadow = 0xFFFFFFFFu; LCD2LivesShadow = 0xFF;
+    LCD2LevelShadow = 0xFF; LCD2MsgTimer = 0;
     LCD2_UpdateGameplayStatus();
 }
 
@@ -715,6 +742,7 @@ void GameOver_Init(void){
     ST7735_SetTextColor(ST7735_CYAN);
     ST7735_SetCursor(1,11); ST7735_OutString((char*)lang("Top: try again","Arriba: reiniciar"));
     LCD2ScoreShadow = 0xFFFFFFFFu; LCD2LivesShadow = 0xFF;
+    LCD2LevelShadow = 0xFF;
     LCD2_UpdateGameplayStatus();
 }
 

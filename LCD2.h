@@ -48,4 +48,8 @@ void LCD2_ShowLives(uint8_t lives);
 // state: pass S_TITLE, S_GAMEPLAY, S_PAUSED, or S_GAMEOVER (from game.h).
 void LCD2_ShowReaction(uint8_t state);
 
+// Display the current difficulty level (0-9) at the bottom of the portrait display.
+// Call during gameplay whenever the level changes.
+void LCD2_ShowLevel(uint8_t level);
+
 #endif // LCD2_H

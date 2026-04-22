@@ -356,6 +356,39 @@ static void DrawSleepyEyes(uint16_t face_color){
     LCD2_FillRect(FACE_X+38, FACE_Y+17, 8, 3, LCD2_BLACK);   // right slit
 }
 
+// Level display — row 15 (y=150) at the very bottom of the portrait screen.
+// Color shifts from green (easy) to red (hard) as level climbs.
+void LCD2_ShowLevel(uint8_t level){
+    static const uint16_t kLevelColors[10] = {
+        0x07E0u, // 0 green
+        0x07E0u, // 1 green
+        0x07FFu, // 2 cyan
+        0x07FFu, // 3 cyan
+        0xFFE0u, // 4 yellow
+        0xFFE0u, // 5 yellow
+        0xFD20u, // 6 orange
+        0xFD20u, // 7 orange
+        0x001Fu, // 8 red
+        0x001Fu, // 9 red
+    };
+    uint8_t l = (level > 9u) ? 9u : level;
+    uint16_t col = kLevelColors[l];
+
+    LCD2_Begin();
+    LCD2_FillRect(0, 148, LCD2_WIDTH, 12, LCD2_BLACK);  // clear level row
+
+    // Draw a filled bar whose width grows with level (full = 128px at level 9)
+    uint8_t barW = (uint8_t)((uint16_t)(l + 1) * LCD2_WIDTH / 10);
+    LCD2_FillRect(0, 148, barW, 5, col);
+
+    // Draw "LVL:X" text just below the bar
+    char buf[8];
+    buf[0]='L'; buf[1]='V'; buf[2]='L'; buf[3]=':';
+    buf[4]=(char)('0' + l); buf[5]=' '; buf[6]='\0';
+    ST7735_DrawString(1, 15, buf, (int16_t)col);
+    LCD2_End();
+}
+
 void LCD2_ShowReaction(uint8_t state){
     LCD2_Begin();
     uint16_t bg_color = LCD2_BLACK;
@@ -373,7 +406,7 @@ void LCD2_ShowReaction(uint8_t state){
             ST7735_DrawString(1, 11, (char*)"BOT:  pause",      (int16_t)LCD2_WHITE);
             ST7735_DrawString(1, 12, (char*)"3 lives total",    (int16_t)LCD2_WHITE);
             ST7735_DrawString(1, 13, (char*)"Avoid the bombs!", (int16_t)LCD2_RED);
-            ST7735_DrawString(2, 14, (char*)"- GOOD LUCK! -",   (int16_t)LCD2_GREEN);
+            // Row 14 intentionally left blank — level bar will appear at row 15.
             break;
 
         case S_GAMEOVER:
