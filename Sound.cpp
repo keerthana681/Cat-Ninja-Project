@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <ti/devices/msp/msp.h>
 #include "Sound.h"
-#include "sounds/sounds_trimmed.h"
+#include "sounds/sounds.h"
 #include "../inc/DAC5.h"
 
 // ── Playback state (written from main, read from ISR) ─────────────────────
@@ -77,9 +77,8 @@ void Sound_Stop(void){
 
 // ── Game sounds ────────────────────────────────────────────────────────────
 void Sound_Sad(void){
-    // Loops continuously — call Sound_Stop() to silence it.
-    SoundPt    = sad;
-    SoundCount = sizeof(sad);
+    SoundPt    = explosion;
+    SoundCount = sizeof(explosion);
     SoundIndex = 0;
     SoundLoop  = true;
 }

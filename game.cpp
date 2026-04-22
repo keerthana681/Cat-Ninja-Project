@@ -35,11 +35,9 @@ static const FruitDim P[10] = {
     {32,32},{42,31},   // 6-7  pomegranate
     {32,48},{69,59}    // 8-9  bomb/boom
 };
-static const unsigned short* TitleLogos[5] = {
-    catlogo1, catlogo2, catlogo3, catlogo2, catlogo3
-};
-static const int16_t TitleLogoW[5] = {62, 62, 75, 62, 75};
-static const int16_t TitleLogoH[5] = {65, 65, 63, 65, 63};
+static const unsigned short* TitleLogos[1] = {titlecat4};
+static const int16_t TitleLogoW[1] = { 58 };
+static const int16_t TitleLogoH[1] = { 63 };
 
 // ── Fruit types & timing constants ────────────────────────────────────────
 #define MAX_FRUITS        5
@@ -89,11 +87,11 @@ static uint8_t  LCD2MsgTimer   = 0;
 static uint8_t prevSelection    = 0xFF;
 static uint8_t settingsSelection = 0xFF;
 static uint8_t languageSelection = 0xFF;
+static uint8_t titleLogoFrame   = 0;
+static uint8_t titleLogoTimer   = 0;
 static uint8_t titleCursor      = MENU_NONE;
 static uint8_t settingsCursor   = MENU_NONE;
 static uint8_t languageCursor   = MENU_NONE;
-static uint8_t titleLogoFrame   = 0;
-static uint8_t titleLogoTimer   = 0;
 
 // Joystick cache & slow-mo
 static uint32_t JoyX = 2048, JoyY = 2048;
@@ -105,10 +103,13 @@ static uint8_t  GravCounter = 0;
 #define LCD1_WIDTH   160
 #define LCD1_HEIGHT  128
 #define LIGHT_GREY   0xC618u   // RGB565 (192,192,192)
-#define TITLE_LOGO_BOX_W 75
-#define TITLE_LOGO_BOX_H 65
-#define TITLE_LOGO_BOX_X ((LCD1_WIDTH - TITLE_LOGO_BOX_W) / 2)
-#define TITLE_LOGO_Y 68
+// Title screen layout (landscape 160×128):
+//   y= 0-25 : "Cat Ninja" title text (catninjatitle 134×25, bottom anchor y=25)
+//   y=26-92 : titlecat sprite (bottom anchor TITLE_SPRITE_Y=92, max h=64)
+//   y=110+  : INFO / SETTINGS / PLAY buttons (row 11)
+#define TITLE_TEXT_Y     25   // bottom anchor of catninjatitle
+#define TITLE_SPRITE_Y   92   // bottom anchor of titlecat animation
+#define TITLE_BUTTON_ROW 11   // ST7735 text row for menu buttons
 
 // ── Cursor ────────────────────────────────────────────────────────────────
 typedef struct {
@@ -210,7 +211,7 @@ static void LCD2_TickEventMsg(void){
 
 // ── Cursor helpers ─────────────────────────────────────────────────────────
 static int16_t Cursor_MaxY(void){
-    if(S == S_TITLE)    return 108;
+    if(S == S_TITLE)    return 118;
     if(S == S_SETTINGS) return 84;
     if(S == S_LANGUAGE) return 72;
     return LCD1_HEIGHT - 1 - CURSOR_MAX_HALF_H;
@@ -228,7 +229,7 @@ static void Cursor_Sample(void){
     int16_t nx, ny;
     if(S == S_TITLE){
         nx = Clamp16(MapAxis(JoyX, LCD1_WIDTH-1), CURSOR_MAX_HALF_W, LCD1_WIDTH-1-CURSOR_MAX_HALF_W);
-        ny = 104;
+        ny = 114;
     } else if(S == S_SETTINGS || S == S_LANGUAGE){
         nx = 80;
         ny = (int16_t)(JoyY * 127 / 4095);
@@ -240,7 +241,7 @@ static void Cursor_Sample(void){
     if(Abs16(ny - BladeCursor.y) >= 2) BladeCursor.y = ny;
 }
 static uint8_t Cursor_IsHoveringSelectable(void){
-    if(S == S_TITLE)    return (BladeCursor.y >= 96 && BladeCursor.y <= 112);
+    if(S == S_TITLE)    return (BladeCursor.y >= 108 && BladeCursor.y <= 122);
     if(S == S_SETTINGS) return (BladeCursor.y >= 24 && BladeCursor.y <= 80);
     if(S == S_LANGUAGE) return (BladeCursor.y >= 33 && BladeCursor.y <= 66);
     return 0;
@@ -254,13 +255,13 @@ static void Cursor_UpdateColor(void){
 
 static void Cursor_Draw(void){
     if(Cursor_IsSlicing()){
-        DrawBitmapMasked(BladeCursor.x - (CURSOR1_W / 2),
-                         BladeCursor.y + (CURSOR1_H / 2),
-                         cursor1, CURSOR1_W, CURSOR1_H);
-    } else {
         DrawBitmapMasked(BladeCursor.x - (CURSOR2_W / 2),
                          BladeCursor.y + (CURSOR2_H / 2),
                          cursor2, CURSOR2_W, CURSOR2_H);
+    } else {
+        DrawBitmapMasked(BladeCursor.x - (CURSOR1_W / 2),
+                         BladeCursor.y + (CURSOR1_H / 2),
+                         cursor1, CURSOR1_W, CURSOR1_H);
     }
 }
 // ── Slash trail ────────────────────────────────────────────────────────────
@@ -431,6 +432,14 @@ static void DrawScanline(int16_t sy,
     }
 }
 
+static void DrawBitmapMasked(int16_t x, int16_t y,
+                             const uint16_t *image, int16_t w, int16_t h){
+    int16_t top = y - h + 1;
+    for(int16_t sy = top; sy <= y; sy++){
+        DrawScanline(sy, image, x, top, w, h);
+    }
+}
+
 static void Fruits_Draw(void){
     LCD1_Select();
 
@@ -438,13 +447,13 @@ static void Fruits_Draw(void){
     const uint16_t *cimg;
     int16_t cw, ch, cx, ctop;
     if(Cursor_IsSlicing()){
-        cimg = cursor1; cw = CURSOR1_W; ch = CURSOR1_H;
-        cx   = BladeCursor.x - CURSOR1_W / 2;
-        ctop = BladeCursor.y + CURSOR1_H / 2 - CURSOR1_H + 1;
-    } else {
         cimg = cursor2; cw = CURSOR2_W; ch = CURSOR2_H;
         cx   = BladeCursor.x - CURSOR2_W / 2;
         ctop = BladeCursor.y + CURSOR2_H / 2 - CURSOR2_H + 1;
+    } else {
+        cimg = cursor1; cw = CURSOR1_W; ch = CURSOR1_H;
+        cx   = BladeCursor.x - CURSOR1_W / 2;
+        ctop = BladeCursor.y + CURSOR1_H / 2 - CURSOR1_H + 1;
     }
 
     for(int16_t sy = 0; sy < LCD1_HEIGHT; sy++){
@@ -501,19 +510,18 @@ static void Collision_Check(void){
 }
 
 static void Title_DrawLogo(uint8_t frame){
-    int16_t w = TitleLogoW[frame];
-    int16_t h = TitleLogoH[frame];
+    int16_t w = TitleLogoW[frame], h = TitleLogoH[frame];
     int16_t x = (int16_t)((LCD1_WIDTH - w) / 2);
     LCD1_Select();
-    ST7735_FillRect(TITLE_LOGO_BOX_X, TITLE_LOGO_Y - TITLE_LOGO_BOX_H + 1,
-                    TITLE_LOGO_BOX_W, TITLE_LOGO_BOX_H, ST7735_BLACK);
-    ST7735_DrawBitmap(x, TITLE_LOGO_Y, TitleLogos[frame], w, h);
+    ST7735_FillRect(0, TITLE_TEXT_Y + 1, LCD1_WIDTH,
+                    TITLE_SPRITE_Y - TITLE_TEXT_Y + 1, ST7735_BLACK);
+    ST7735_DrawBitmap(x, TITLE_SPRITE_Y, TitleLogos[frame], w, h);
 }
 static void Title_AnimateLogo(void){
     titleLogoTimer++;
     if(titleLogoTimer < 8) return;
     titleLogoTimer = 0;
-    titleLogoFrame = (uint8_t)((titleLogoFrame + 1) % 5);
+    titleLogoFrame = 0;
     Title_DrawLogo(titleLogoFrame);
 }
 
@@ -525,9 +533,9 @@ void Title_Init(void){
     LCD1_Select();
     ST7735_FillScreen(ST7735_BLACK);
     prevSelection = MENU_NONE; titleCursor = MENU_NONE;
-    titleLogoFrame = 0;
-    titleLogoTimer = 0;
-    Cursor_Reset(80, 104);
+    titleLogoFrame = 0; titleLogoTimer = 0;
+    Cursor_Reset(80, 114);
+    
     Title_DrawLogo(titleLogoFrame);
     Title_RenderButton(0, 0); Title_RenderButton(1, 0); Title_RenderButton(2, 0);
 }
@@ -540,7 +548,7 @@ static void Title_RenderButton(uint8_t slot, uint8_t selected){
         lang("PLAY",     "JUGAR")
     };
     LCD1_Select();
-    ST7735_SetCursor(cols[slot], 10);
+    ST7735_SetCursor(cols[slot], TITLE_BUTTON_ROW);
     ST7735_SetTextColor(selected ? ST7735_YELLOW : ST7735_WHITE);
     ST7735_OutString((char*)labels[slot]);
 }
@@ -696,8 +704,11 @@ void Credits_Init(void){
 void Gameplay_Init(void){
     Sound_Stop();
     LCD1_Select(); ST7735_FillScreen(ST7735_WHITE);
-    Score = 0; Lives = 3;
-    LED_SetLives(3);
+    // Only reset score/lives on a fresh start; preserve them when resuming from pause.
+    if(PreviousState != (uint32_t)S_PAUSED){
+        Score = 0; Lives = 3;
+        LED_SetLives(3);
+    }
     Cursor_Reset(80, 64);
     Trail_Init();
     Fruit_Init();
@@ -825,7 +836,12 @@ void Game_UpdateFrame(void){
 
     if(S != PreviousState){
         (FSM[S].InitPt)();
-        LCD2_ShowReaction((uint8_t)S);
+        {
+            const unsigned short *img = excited_cat; int16_t w=89, h=65;
+            if(S == S_PAUSED)       { img=sleeping_cat; w=100; }
+            else if(S == S_GAMEOVER){ img=sleeping_cat;  w=100; }
+            LCD2_ShowReaction(img, w, h);
+        }
         LCD1_Select();
         PreviousState = S;
     }

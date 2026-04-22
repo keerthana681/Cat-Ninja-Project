@@ -17,7 +17,6 @@ C:/MSPM0_ValvanoWare/inc/LaunchPad.cpp \
 C:/MSPM0_ValvanoWare/inc/SPI.cpp \
 C:/MSPM0_ValvanoWare/inc/ST7735.cpp \
 C:/MSPM0_ValvanoWare/inc/SlidePot.cpp \
-../SmallFont.cpp \
 ../Sound.cpp \
 ../Switch.cpp \
 C:/MSPM0_ValvanoWare/inc/TExaS.cpp \
@@ -49,7 +48,6 @@ OBJS += \
 ./SPI.o \
 ./ST7735.o \
 ./SlidePot.o \
-./SmallFont.o \
 ./Sound.o \
 ./Switch.o \
 ./TExaS.o \
@@ -68,7 +66,6 @@ CPP_DEPS += \
 ./SPI.d \
 ./ST7735.d \
 ./SlidePot.d \
-./SmallFont.d \
 ./Sound.d \
 ./Switch.d \
 ./TExaS.d \
@@ -89,7 +86,6 @@ OBJS__QUOTED += \
 "SPI.o" \
 "ST7735.o" \
 "SlidePot.o" \
-"SmallFont.o" \
 "Sound.o" \
 "Switch.o" \
 "TExaS.o" \
@@ -112,7 +108,6 @@ CPP_DEPS__QUOTED += \
 "SPI.d" \
 "ST7735.d" \
 "SlidePot.d" \
-"SmallFont.d" \
 "Sound.d" \
 "Switch.d" \
 "TExaS.d" \
@@ -135,7 +130,6 @@ CPP_SRCS__QUOTED += \
 "C:/MSPM0_ValvanoWare/inc/SPI.cpp" \
 "C:/MSPM0_ValvanoWare/inc/ST7735.cpp" \
 "C:/MSPM0_ValvanoWare/inc/SlidePot.cpp" \
-"../SmallFont.cpp" \
 "../Sound.cpp" \
 "../Switch.cpp" \
 "C:/MSPM0_ValvanoWare/inc/TExaS.cpp" \

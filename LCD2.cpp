@@ -19,8 +19,8 @@
 #include <stdint.h>
 #include <ti/devices/msp/msp.h>
 #include "LCD2.h"
-#include "game.h"         // for S_TITLE, S_GAMEPLAY, etc.
-#include "ST7735.h"       // for ST7735_DrawString on LCD2 via shared SPI
+#include "game.h"           // for S_TITLE, S_GAMEPLAY, etc.
+#include "ST7735.h"         // for ST7735_DrawBitmap / DrawString on LCD2
 #include "../inc/Clock.h"
 #include "../inc/SPI.h"
 
@@ -282,79 +282,17 @@ void LCD2_ShowScore(uint32_t score){
 // Center 3 squares: total = 3*14 + 2*6 = 54px; start x = (128-54)/2 = 37
 
 void LCD2_ShowLives(uint8_t lives){
-    LCD2_Begin();
-    // Redraw the full lives panel so stale pixels never linger.
-    LCD2_FillRect(0, LIVES_PANEL_Y, LCD2_WIDTH, LIVES_PANEL_H, LCD2_BLACK);
-
-    static const uint8_t xs[3] = {37, 37+LIVES_SZ+LIVES_GAP, 37+2*(LIVES_SZ+LIVES_GAP)};
-    for(int i = 0; i < 3; i++){
-        uint16_t color = (i < (int)lives) ? LCD2_RED : LCD2_DARKGREY;
-        LCD2_FillRect(xs[i], LIVES_Y0, LIVES_SZ, LIVES_SZ, color);
-    }
-    LCD2_End();
+    (void)lives;  // Lives shown via LEDs on PCB; no squares on LCD2.
 }
 
-// ── Reaction face ─────────────────────────────────────────────────────────
+// ── Reaction sprites ──────────────────────────────────────────────────────
 //
-// A cartoon face drawn entirely with rectangles.
-// Face "circle": large yellow rect with black corner squares to fake rounding.
-// Eyes: two small dark squares.
-// Mouth: three rect segments forming a smile, frown, or flat line.
-//
-// Face bounding box: x=36, y=90, w=56, h=56 → right edge x=91, bottom y=145
-
-#define FACE_X   36
-#define FACE_Y   90
-#define FACE_W   56
-#define FACE_H   56
-#define FACE_CRN 10   // corner square size (masks the rectangle's corners)
-
-// Helper: draw the face oval + eyes, with a specified face color.
-static void DrawFaceBase(uint16_t face_color, uint16_t bg_color){
-    // Fill face rectangle
-    LCD2_FillRect(FACE_X, FACE_Y, FACE_W, FACE_H, face_color);
-    // Mask corners to approximate a circle
-    LCD2_FillRect(FACE_X,              FACE_Y,              FACE_CRN, FACE_CRN, bg_color);
-    LCD2_FillRect(FACE_X+FACE_W-FACE_CRN, FACE_Y,          FACE_CRN, FACE_CRN, bg_color);
-    LCD2_FillRect(FACE_X,              FACE_Y+FACE_H-FACE_CRN, FACE_CRN, FACE_CRN, bg_color);
-    LCD2_FillRect(FACE_X+FACE_W-FACE_CRN, FACE_Y+FACE_H-FACE_CRN, FACE_CRN, FACE_CRN, bg_color);
-    // Eyes: two 8×8 dark squares
-    LCD2_FillRect(FACE_X+10, FACE_Y+14, 8, 8, LCD2_BLACK);   // left eye
-    LCD2_FillRect(FACE_X+38, FACE_Y+14, 8, 8, LCD2_BLACK);   // right eye
-}
-
-// Mouth shapes — three rect segments:
-//   smile:   left-up / center-down / right-up  (∪ shape)
-//   frown:   left-down / center-up / right-down (∩ shape)
-//   neutral: single flat rectangle
-static void DrawSmile(uint16_t face_color){
-    // Erase mouth area first
-    LCD2_FillRect(FACE_X+8, FACE_Y+33, FACE_W-16, 12, face_color);
-    LCD2_FillRect(FACE_X+10, FACE_Y+33, 10, 5, LCD2_BLACK);  // left
-    LCD2_FillRect(FACE_X+20, FACE_Y+38,  16, 5, LCD2_BLACK); // center (lower)
-    LCD2_FillRect(FACE_X+36, FACE_Y+33, 10, 5, LCD2_BLACK);  // right
-}
-
-static void DrawFrown(uint16_t face_color){
-    LCD2_FillRect(FACE_X+8, FACE_Y+33, FACE_W-16, 12, face_color);
-    LCD2_FillRect(FACE_X+10, FACE_Y+38, 10, 5, LCD2_BLACK);  // left (lower)
-    LCD2_FillRect(FACE_X+20, FACE_Y+33,  16, 5, LCD2_BLACK); // center (higher)
-    LCD2_FillRect(FACE_X+36, FACE_Y+38, 10, 5, LCD2_BLACK);  // right (lower)
-}
-
-static void DrawNeutral(uint16_t face_color){
-    LCD2_FillRect(FACE_X+8, FACE_Y+33, FACE_W-16, 12, face_color);
-    LCD2_FillRect(FACE_X+10, FACE_Y+36, FACE_W-20, 5, LCD2_BLACK);  // flat line
-}
-
-// Closed/squint eyes for "sleeping" expression
-static void DrawSleepyEyes(uint16_t face_color){
-    // Redraw eye areas, replace solid squares with horizontal slits
-    LCD2_FillRect(FACE_X+10, FACE_Y+14, 8, 8, face_color);   // clear left eye
-    LCD2_FillRect(FACE_X+38, FACE_Y+14, 8, 8, face_color);   // clear right eye
-    LCD2_FillRect(FACE_X+10, FACE_Y+17, 8, 3, LCD2_BLACK);   // left slit
-    LCD2_FillRect(FACE_X+38, FACE_Y+17, 8, 3, LCD2_BLACK);   // right slit
-}
+// Cat sprites centered horizontally on LCD2 (128px wide), bottom anchor y=153.
+// All sprites are 65px tall → top row at y=89, within the cleared panel (y=88+).
+//   excited_cat  89×65  x=19
+//   sleeping_cat 100×65 x=14
+//   sleeping_cat 100×65 x=14 (used for both paused and game-over)
+#define CAT_SPRITE_BOTTOM 153
 
 // Level display — row 15 (y=150) at the very bottom of the portrait screen.
 // Color shifts from green (easy) to red (hard) as level climbs.
@@ -389,52 +327,44 @@ void LCD2_ShowLevel(uint8_t level){
     LCD2_End();
 }
 
-void LCD2_ShowReaction(uint8_t state){
-    LCD2_Begin();
-    uint16_t bg_color = LCD2_BLACK;
-    // Redraw the full bottom panel every time so old content cannot linger.
-    LCD2_FillRect(0, 88, LCD2_WIDTH, LCD2_HEIGHT - 88, bg_color);
-
-    uint16_t face_color;
-
-    switch(state){
-        case S_GAMEPLAY:
-            // Show instructions text instead of face (score/lives are above this area)
-            // SPI is directed to LCD2 here, so ST7735_DrawString draws on LCD2.
-            ST7735_DrawString(1, 9,  (char*)"JOY:  move blade", (int16_t)LCD2_CYAN);
-            ST7735_DrawString(1, 10, (char*)"TOP:  slash fruit",(int16_t)LCD2_YELLOW);
-            ST7735_DrawString(1, 11, (char*)"BOT:  pause",      (int16_t)LCD2_WHITE);
-            ST7735_DrawString(1, 12, (char*)"3 lives total",    (int16_t)LCD2_WHITE);
-            ST7735_DrawString(1, 13, (char*)"Avoid the bombs!", (int16_t)LCD2_RED);
-            // Row 14 intentionally left blank — level bar will appear at row 15.
-            break;
-
-        case S_GAMEOVER:
-            // Sad red face on game over
-            face_color = LCD2_RED;
-            DrawFaceBase(face_color, bg_color);
-            DrawFrown(face_color);
-            break;
-
-        case S_PAUSED:
-            // Sleepy yellow face while paused
-            face_color = LCD2_YELLOW;
-            DrawFaceBase(face_color, bg_color);
-            DrawSleepyEyes(face_color);
-            DrawNeutral(face_color);
-            // "Zzz" dots above face to indicate sleep
-            LCD2_FillRect(FACE_X + FACE_W + 2, FACE_Y,      4, 4, LCD2_WHITE);
-            LCD2_FillRect(FACE_X + FACE_W + 8, FACE_Y - 5,  5, 5, LCD2_WHITE);
-            LCD2_FillRect(FACE_X + FACE_W +15, FACE_Y -10,  6, 6, LCD2_WHITE);
-            break;
-
-        case S_TITLE:
-        default:
-            // Neutral white face on title/other screens
-            face_color = LCD2_WHITE;
-            DrawFaceBase(face_color, bg_color);
-            DrawNeutral(face_color);
-            break;
+// Draw an RGB565 bitmap on LCD2's BGR display.
+// Handles LCD2's 128×160 coordinate space (not LCD1's 160×128).
+// y = bottom anchor (same convention as ST7735_DrawBitmap).
+// Swaps R and B channels so RGB-encoded sprites display with correct colors.
+static void LCD2_DrawBitmap(int16_t x, int16_t y, const unsigned short *img, int16_t w, int16_t h){
+    int16_t top = (int16_t)(y - h + 1);
+    if(top < 0 || y >= LCD2_HEIGHT || x < 0 || (x + w) > LCD2_WIDTH) return;
+    LCD2_SetWindow((uint8_t)x, (uint8_t)top, (uint8_t)(x+w-1), (uint8_t)y);
+    // BMP stored bottom-up: row h-1 = top of image. Send top-to-bottom.
+    for(int16_t row = h - 1; row >= 0; row--){
+        for(int16_t col = 0; col < w; col++){
+            uint16_t px = img[(uint32_t)row * (uint32_t)w + (uint32_t)col];
+            uint16_t r5 = (px >> 11) & 0x1Fu;
+            uint16_t g6 = (px >>  5) & 0x3Fu;
+            uint16_t b5 =  px        & 0x1Fu;
+            uint16_t out = (uint16_t)((b5 << 11) | (g6 << 5) | r5);
+            LCD2_Data((uint8_t)(out >> 8));
+            LCD2_Data((uint8_t) out);
+        }
     }
+}
+
+void LCD2_ShowReaction(const unsigned short *img, int16_t w, int16_t h){
+    LCD2_Begin();
+    LCD2_FillRect(0, 88, LCD2_WIDTH, LCD2_HEIGHT - 88, LCD2_BLACK);
+    int16_t x = (int16_t)((LCD2_WIDTH - w) / 2);
+    LCD2_DrawBitmap(x, CAT_SPRITE_BOTTOM, img, w, h);
+    LCD2_End();
+}
+
+void LCD2_ShowPaused(void){
+    LCD2_Begin();
+    LCD2_FillRect(0, 88, LCD2_WIDTH, LCD2_HEIGHT - 88, LCD2_BLACK);
+    ST7735_SetTextColor(LCD2_CYAN);
+    ST7735_SetCursor(4, 8);
+    ST7735_OutString((char*)"zzz...");
+    ST7735_SetTextColor(LCD2_WHITE);
+    ST7735_SetCursor(3, 9);
+    ST7735_OutString((char*)"PAUSED");
     LCD2_End();
 }

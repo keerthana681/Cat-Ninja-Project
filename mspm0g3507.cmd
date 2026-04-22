@@ -32,6 +32,7 @@
 
 *****************************************************************************/
 -uinterruptVectors
+--unused_section_elimination
 
 MEMORY
 {

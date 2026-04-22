@@ -44,12 +44,15 @@ void LCD2_ShowScore(uint32_t score);
 // lives: 0-3 (0 = all grey, 3 = all red).
 void LCD2_ShowLives(uint8_t lives);
 
-// Draw a cartoon reaction face matching the current FSM game state.
-// state: pass S_TITLE, S_GAMEPLAY, S_PAUSED, or S_GAMEOVER (from game.h).
-void LCD2_ShowReaction(uint8_t state);
+// Draw a cat sprite in the bottom panel (y=88-160), centered horizontally.
+// The caller (game.cpp) selects the sprite to avoid duplicating rodata here.
+void LCD2_ShowReaction(const unsigned short *img, int16_t w, int16_t h);
 
 // Display the current difficulty level (0-9) at the bottom of the portrait display.
 // Call during gameplay whenever the level changes.
 void LCD2_ShowLevel(uint8_t level);
+
+// Show a "PAUSED" indicator in the cat panel (replaces sleeping_cat sprite).
+void LCD2_ShowPaused(void);
 
 #endif // LCD2_H

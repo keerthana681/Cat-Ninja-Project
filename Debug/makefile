@@ -23,7 +23,6 @@ ORDERED_OBJS += \
 "./SPI.o" \
 "./ST7735.o" \
 "./SlidePot.o" \
-"./SmallFont.o" \
 "./Sound.o" \
 "./Switch.o" \
 "./TExaS.o" \
@@ -159,9 +158,9 @@ ECE319K_Lab9H.out: $(OBJS) $(CMD_SRCS) $(GEN_CMDS)
 # Other Targets
 clean:
 	-$(RM) $(EXE_OUTPUTS__QUOTED)
-	-$(RM) "ADC.o" "Clock.o" "DAC5.o" "Fruit.o" "Joystick.o" "LCD2.o" "LED.o" "Lab9HMain.o" "Language.o" "LaunchPad.o" "SPI.o" "ST7735.o" "SlidePot.o" "SmallFont.o" "Sound.o" "Switch.o" "TExaS.o" "Timer.o" "game.o" "ticlang\startup_mspm0g3507_ticlang.o" 
+	-$(RM) "ADC.o" "Clock.o" "DAC5.o" "Fruit.o" "Joystick.o" "LCD2.o" "LED.o" "Lab9HMain.o" "Language.o" "LaunchPad.o" "SPI.o" "ST7735.o" "SlidePot.o" "Sound.o" "Switch.o" "TExaS.o" "Timer.o" "game.o" "ticlang\startup_mspm0g3507_ticlang.o" 
 	-$(RM) "ADC.d" "Clock.d" "ticlang\startup_mspm0g3507_ticlang.d" 
-	-$(RM) "DAC5.d" "Fruit.d" "Joystick.d" "LCD2.d" "LED.d" "Lab9HMain.d" "Language.d" "LaunchPad.d" "SPI.d" "ST7735.d" "SlidePot.d" "SmallFont.d" "Sound.d" "Switch.d" "TExaS.d" "Timer.d" "game.d" 
+	-$(RM) "DAC5.d" "Fruit.d" "Joystick.d" "LCD2.d" "LED.d" "Lab9HMain.d" "Language.d" "LaunchPad.d" "SPI.d" "ST7735.d" "SlidePot.d" "Sound.d" "Switch.d" "TExaS.d" "Timer.d" "game.d" 
 	-@echo 'Finished clean'
 	-@echo ' '
 
