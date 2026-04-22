@@ -36,7 +36,7 @@ static const FruitDim P[10] = {
     {32,48},{69,59}    // 8-9  bomb/boom
 };
 static const unsigned short* TitleLogos[1] = {titlecat4};
-static const int16_t TitleLogoW[1] = { 58 };
+static const int16_t TitleLogoW[1] = { 105 };
 static const int16_t TitleLogoH[1] = { 63 };
 
 // ── Fruit types & timing constants ────────────────────────────────────────
@@ -98,11 +98,16 @@ static uint32_t JoyX = 2048, JoyY = 2048;
 static uint16_t SlowmoTimer = 0;
 static uint8_t  SlowmoFrame = 0;
 static uint8_t  GravCounter = 0;
+static uint16_t GameFrames  = 0;   // frames elapsed in current gameplay session
 
 // Display constants
 #define LCD1_WIDTH   160
 #define LCD1_HEIGHT  128
 #define LIGHT_GREY   0xC618u   // RGB565 (192,192,192)
+// Dojo wood-plank floor palette (RGB565, LCD1)
+#define WOOD_JOINT   0x118Au   // dark warm brown joint   (BGR565)
+#define WOOD_LIGHT   0x54B9u   // honey/maple plank       (BGR565)
+#define WOOD_DARK    0x3334u   // medium brown plank      (BGR565)
 // Title screen layout (landscape 160×128):
 //   y= 0-25 : "Cat Ninja" title text (catninjatitle 134×25, bottom anchor y=25)
 //   y=26-92 : titlecat sprite (bottom anchor TITLE_SPRITE_Y=92, max h=64)
@@ -276,8 +281,10 @@ static void Gameplay_DrawBorder(void){
 }
 
 static uint8_t DifficultyLevel(void){
-    // Level 0-9: one level per 10 points scored.
-    uint8_t level = (uint8_t)(Score / 10U);
+    // Level 0-9: rises by score (1 per 10 pts) or time (1 per 15 s), whichever is higher.
+    uint8_t fromScore = (uint8_t)(Score / 10U);
+    uint8_t fromTime  = (uint8_t)(GameFrames / 450U);  // 450 frames ≈ 15 s at 30 Hz
+    uint8_t level = fromScore > fromTime ? fromScore : fromTime;
     return (level > 9U) ? 9U : level;
 }
 static uint8_t Fruit_SpawnChance(void){
@@ -319,10 +326,11 @@ static void Fruit_Init(void){
         Fruits[i].hitCount = 0;   Fruits[i].deathTimer = 0;
         Fruits[i].slicedTimer = 0;
     }
-    GravCounter = 0; SlowmoTimer = 0; SlowmoFrame = 0;
+    GravCounter = 0; SlowmoTimer = 0; SlowmoFrame = 0; GameFrames = 0;
 }
 
 static void Fruit_Update(void){
+    if(GameFrames < 4500U) GameFrames++;   // cap at 2.5 min worth of frames
     GravCounter++;
     if(SlowmoTimer > 0){
         SlowmoTimer--;
@@ -338,8 +346,8 @@ static void Fruit_Update(void){
             uint8_t placed = 0;
             if(Fruit_ActiveCount() >= (uint8_t)(2U + (level / 2U) + 1U)) continue;
             if((rand() % 100) >= Fruit_SpawnChance()) continue;
-            // Bomb probability scales from 1-in-20 at level 0 to 5-in-20 at level 9.
-            uint8_t bombThresh = (uint8_t)(1U + level / 2U);
+            // Bomb probability scales from 3-in-20 at level 0 to 7-in-20 at level 9.
+            uint8_t bombThresh = (uint8_t)(3U + level / 2U);
             int r = rand() % 20;
             if     (r < (int)bombThresh) t = FRUIT_BOMB;
             else if(r < (int)(bombThresh + 2)) t = FRUIT_POMEGRANATE;
@@ -385,8 +393,9 @@ static void Fruit_Update(void){
         //     }
         // }
 
-        // Physics — gravity applies every 3rd frame at level 0, every 2nd at level 5+.
-        uint8_t gravMod = (DifficultyLevel() >= 5u) ? 2u : 3u;
+        // Gravity cadence tightens with difficulty: every 4th, 3rd, 2nd, or every frame.
+        uint8_t lv = DifficultyLevel();
+        uint8_t gravMod = (lv < 3u) ? 4u : (lv < 6u) ? 3u : (lv < 8u) ? 2u : 1u;
         if(GravCounter % gravMod == 0) Fruits[i].vy++;
         Fruits[i].x += Fruits[i].vx;
         Fruits[i].y += Fruits[i].vy;
@@ -440,6 +449,31 @@ static void DrawBitmapMasked(int16_t x, int16_t y,
     }
 }
 
+// Draw one horizontal strip of the dojo wood-plank floor.
+// Planks are 16 px tall; joints are 1 px dark lines.
+// Vertical joints are staggered (brick-bond) between odd/even plank rows.
+static void Wood_DrawBgRow(int16_t sy){
+    uint8_t plank = (uint8_t)(sy >> 4);        // sy / 16
+    if((sy & 0xF) == 0){                        // horizontal joint
+        ST7735_DrawFastHLine(0, sy, LCD1_WIDTH, WOOD_JOINT);
+        return;
+    }
+    uint16_t bg = (plank & 1u) ? WOOD_DARK : WOOD_LIGHT;
+    if((plank & 1u) == 0){
+        // even plank: one vertical joint at x=80
+        ST7735_DrawFastHLine(0,  sy, 80, bg);
+        ST7735_DrawFastHLine(80, sy, 1,  WOOD_JOINT);
+        ST7735_DrawFastHLine(81, sy, 79, bg);
+    } else {
+        // odd plank: joints at x=40 and x=120
+        ST7735_DrawFastHLine(0,   sy, 40, bg);
+        ST7735_DrawFastHLine(40,  sy, 1,  WOOD_JOINT);
+        ST7735_DrawFastHLine(41,  sy, 79, bg);
+        ST7735_DrawFastHLine(120, sy, 1,  WOOD_JOINT);
+        ST7735_DrawFastHLine(121, sy, 39, bg);
+    }
+}
+
 static void Fruits_Draw(void){
     LCD1_Select();
 
@@ -457,8 +491,8 @@ static void Fruits_Draw(void){
     }
 
     for(int16_t sy = 0; sy < LCD1_HEIGHT; sy++){
-        // 1. Clear this row to white (fast: one SPI window + 160 identical pixels)
-        ST7735_DrawFastHLine(0, sy, LCD1_WIDTH, ST7735_WHITE);
+        // 1. Draw wood floor background for this row
+        Wood_DrawBgRow(sy);
         // 2. Paint active fruit pixels on this row
         for(int i = 0; i < MAX_FRUITS; i++){
             if(!Fruits[i].active) continue;
@@ -518,11 +552,7 @@ static void Title_DrawLogo(uint8_t frame){
     ST7735_DrawBitmap(x, TITLE_SPRITE_Y, TitleLogos[frame], w, h);
 }
 static void Title_AnimateLogo(void){
-    titleLogoTimer++;
-    if(titleLogoTimer < 8) return;
-    titleLogoTimer = 0;
-    titleLogoFrame = 0;
-    Title_DrawLogo(titleLogoFrame);
+    // Single-frame logo — drawn once at Title_Init, never needs redrawing.
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -535,7 +565,11 @@ void Title_Init(void){
     prevSelection = MENU_NONE; titleCursor = MENU_NONE;
     titleLogoFrame = 0; titleLogoTimer = 0;
     Cursor_Reset(80, 114);
-    
+
+    ST7735_SetTextColor(ST7735_RED);
+    ST7735_SetCursor(9, 1);
+    ST7735_OutString((char*)"CAT NINJA");
+
     Title_DrawLogo(titleLogoFrame);
     Title_RenderButton(0, 0); Title_RenderButton(1, 0); Title_RenderButton(2, 0);
 }
@@ -572,18 +606,20 @@ void Instructions_Init(void){
     DrawSep(13, ST7735_YELLOW);
 
     ST7735_SetTextColor(ST7735_WHITE);
-    ST7735_SetCursor(0, 2); ST7735_OutString((char*)lang("> Slash fruits", "> Corta frutas"));
-    ST7735_SetCursor(2, 3); ST7735_OutString((char*)lang("for points!", "para puntos!"));
+    ST7735_SetCursor(0, 2); ST7735_OutString((char*)lang("> Joystick=cursor", "> Joystick=cursor"));
+    ST7735_SetCursor(0, 3); ST7735_OutString((char*)lang("> Hold TOP: slice!", "> Mantener TOP:cortar"));
+    ST7735_SetCursor(0, 4); ST7735_OutString((char*)lang("> Fruits=pts!", "> Frutas=puntos!"));
     ST7735_SetTextColor(ST7735_RED);
-    ST7735_SetCursor(0, 4); ST7735_OutString((char*)lang("> Dodge the bombs", "> Evita bombas!"));
+    ST7735_SetCursor(0, 5); ST7735_OutString((char*)lang("> DODGE BOMBS", "> EVITA BOMBAS"));
     ST7735_SetTextColor(ST7735_WHITE);
-    ST7735_SetCursor(2, 5); ST7735_OutString((char*)lang("bomb = -1 life", "bomba=-1 vida"));
-    ST7735_SetCursor(0, 6); ST7735_OutString((char*)lang("> 3 lives total", "> 3 vidas total"));
-    ST7735_SetCursor(2, 7); ST7735_OutString((char*)lang("3 misses = KO!", "3 fallas = fin"));
+    ST7735_SetCursor(2, 6); ST7735_OutString((char*)lang("hit=-1 life", "golpe=-1 vida"));
+    ST7735_SetCursor(0, 7); ST7735_OutString((char*)lang("> Miss 3 = KO!", "> 3 fallos = fin"));
     ST7735_SetTextColor(0xFD20u);
-    ST7735_SetCursor(0, 9); ST7735_OutString((char*)lang("> Slice every fruit", "> Corta toda fruta"));
-    ST7735_SetCursor(2,10); ST7735_OutString((char*)lang("before it drops!", "antes de caer!"));
+    ST7735_SetCursor(0, 8); ST7735_OutString((char*)lang("> Gets faster over", "> Acelera con"));
+    ST7735_SetCursor(2, 9); ST7735_OutString((char*)lang("time and score!", "tiempo y puntos!"));
     ST7735_SetTextColor(ST7735_CYAN);
+    ST7735_SetCursor(0,10); ST7735_OutString((char*)lang("> Slide pot=volume", "> Desliz=volumen"));
+    ST7735_SetCursor(0,11); ST7735_OutString((char*)lang("> Score on 2nd LCD", "> Puntos en LCD2"));
     ST7735_SetCursor(1,12); ST7735_OutString((char*)lang("Bottom btn: back", "Abajo: volver"));
 }
 
@@ -602,7 +638,7 @@ void Settings_Init(void){
     Settings_RenderOption(2, lang("<- Back ","Volver  "), 0);
     DrawSep(105, ST7735_YELLOW);
     ST7735_SetTextColor(ST7735_CYAN);
-    ST7735_SetCursor(0,11); ST7735_OutString((char*)lang("Joy: move cursor", "Mueve cursor"));
+    ST7735_SetCursor(0,11); ST7735_OutString((char*)lang("Joystick: move cursor", "Mueve cursor"));
     ST7735_SetCursor(0,12); ST7735_OutString((char*)lang("Top:sel  Bot:back", "Arriba: sel"));
 }
 static void Settings_RenderOption(uint8_t row, const char* label, uint8_t selected){
@@ -641,7 +677,7 @@ void Language_Init(void){
     DrawSep(13, ST7735_YELLOW);
     Language_RenderOption(LANG_ENGLISH, "ENGLISH", 0);
     Language_RenderOption(LANG_SPANISH, "ESPANOL", 0);
-    ST7735_SetCursor(2, 8); ST7735_SetTextColor(ST7735_DARKGREY);
+    ST7735_SetCursor(2, 8); ST7735_SetTextColor(ST7735_WHITE);
     ST7735_OutString((char*)lang("Active: ","Activo: "));
     ST7735_SetTextColor(ST7735_GREEN);
     ST7735_OutString((char*)(CurrentLanguage==LANG_ENGLISH ? "English" : "Espanol"));
@@ -668,7 +704,7 @@ void Language_Highlight(void){
     ST7735_SetTextColor(ST7735_YELLOW);
     ST7735_SetCursor((CurrentLanguage==LANG_SPANISH)?10:9, 0); ST7735_OutString((char*)lang("LANGUAGE","IDIOMA"));
     for(int i = 0; i < 2; i++) Language_RenderOption((uint8_t)i, labels[i], i==(int)languageCursor);
-    ST7735_SetCursor(2, 8); ST7735_SetTextColor(ST7735_DARKGREY);
+    ST7735_SetCursor(2, 8); ST7735_SetTextColor(ST7735_WHITE);
     ST7735_OutString((char*)lang("Active: ","Activo: "));
     ST7735_SetTextColor(ST7735_GREEN);
     ST7735_OutString((char*)(CurrentLanguage==LANG_ENGLISH ? "English" : "Espanol"));
@@ -703,7 +739,7 @@ void Credits_Init(void){
 // ─────────────────────────────────────────────────────────────────────────
 void Gameplay_Init(void){
     Sound_Stop();
-    LCD1_Select(); ST7735_FillScreen(ST7735_WHITE);
+    LCD1_Select(); ST7735_FillScreen(WOOD_DARK);
     // Only reset score/lives on a fresh start; preserve them when resuming from pause.
     if(PreviousState != (uint32_t)S_PAUSED){
         Score = 0; Lives = 3;
@@ -725,10 +761,10 @@ void Pause_Init(void){
     LCD1_Select();
     ST7735_FillRect(20, 42, 120, 44, ST7735_BLACK);
     ST7735_SetTextColor(ST7735_WHITE);
-    ST7735_SetCursor(5, 5); ST7735_OutString((char*)lang("-- PAWS-ED --","-- PAUSA --"));
+    ST7735_SetCursor(7, 5); ST7735_OutString((char*)lang("-- PAWS-ED --","-- PAUSA --"));
     ST7735_SetTextColor(ST7735_CYAN);
-    ST7735_SetCursor(3, 7); ST7735_OutString((char*)lang("Bottom: resume","Abajo: seguir"));
-    ST7735_SetCursor(4, 8); ST7735_OutString((char*)lang("Top: title","Arriba: inicio"));
+    ST7735_SetCursor(6, 7); ST7735_OutString((char*)lang("Bot: resume","Abajo: seguir"));
+    ST7735_SetCursor(7, 8); ST7735_OutString((char*)lang("Top: title","Arriba: inicio"));
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -739,19 +775,19 @@ void GameOver_Init(void){
     LCD1_Select(); ST7735_FillScreen(ST7735_BLACK);
     LED_SetLives(0);
     ST7735_SetTextColor(ST7735_RED);
-    ST7735_SetCursor(4, 2); ST7735_OutString((char*)lang("CAT-ASTROPHE!","GATO-STROFE!"));
+    ST7735_SetCursor(7, 2); ST7735_OutString((char*)lang("CAT-ASTROPHE!","GATO-STROFE!"));
     ST7735_SetTextColor(ST7735_WHITE);
-    ST7735_SetCursor(4, 5); ST7735_OutString((char*)lang("Score: ","Puntos: "));
+    ST7735_SetCursor(8, 5); ST7735_OutString((char*)lang("Score: ","Puntos: "));
     ST7735_SetTextColor(ST7735_YELLOW); ST7735_OutUDec(Score);
     if(Score > HighScore){
         HighScore = Score;
         ST7735_SetTextColor(ST7735_GREEN);
-        ST7735_SetCursor(2, 7); ST7735_OutString((char*)lang("IM-PAWS-IBLE!","INCREIBLE!   "));
+        ST7735_SetCursor(7, 7); ST7735_OutString((char*)lang("IM-PAWS-IBLE!","INCREIBLE!   "));
     }
-    ST7735_SetTextColor(ST7735_DARKGREY);
-    ST7735_SetCursor(3, 9); ST7735_OutString((char*)lang("Best: ","Mejor: ")); ST7735_OutUDec(HighScore);
+    ST7735_SetTextColor(ST7735_WHITE);
+    ST7735_SetCursor(8, 9); ST7735_OutString((char*)lang("Best: ","Mejor: ")); ST7735_OutUDec(HighScore);
     ST7735_SetTextColor(ST7735_CYAN);
-    ST7735_SetCursor(1,11); ST7735_OutString((char*)lang("Top: try again","Arriba: reiniciar"));
+    ST7735_SetCursor(6,11); ST7735_OutString((char*)lang("Top: try again","Arriba: reiniciar"));
     LCD2ScoreShadow = 0xFFFFFFFFu; LCD2LivesShadow = 0xFF;
     LCD2LevelShadow = 0xFF;
     LCD2_UpdateGameplayStatus();

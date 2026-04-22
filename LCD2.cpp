@@ -259,7 +259,7 @@ void LCD2_ShowScore(uint32_t score){
     uint8_t d1 = (score / 10)  % 10;
     uint8_t d0 = (score / 100) % 10;
 
-    uint16_t seg_on  = LCD2_YELLOW;
+    uint16_t seg_on  = LCD2_RED;
     uint16_t seg_off = LCD2_BLACK;
     uint8_t x0 = DIGIT_X0;
     uint8_t x1 = DIGIT_X0 + DIGIT_W + DIGIT_GAP;

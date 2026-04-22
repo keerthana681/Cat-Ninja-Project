@@ -13,9 +13,10 @@ static uint32_t       SoundCount = 0;
 static uint32_t       SoundIndex = 0;
 static bool           SoundLoop  = false;
 
-// ── Volume (0–32). Written from main thread, read in ISR. ─────────────────
-// 32 = full amplitude (raw passes through unchanged). uint8_t r/w is atomic on Cortex-M.
-static uint8_t SoundVolume = 32;   // default: full volume
+// ── Volume (0–64). Written from main thread, read in ISR. ─────────────────
+// 32 = original full amplitude.  64 = 2× boost (hard-clipped at DAC max).
+// uint8_t r/w is atomic on Cortex-M.
+static uint8_t SoundVolume = 32;   // default: full volume (matches old behaviour)
 
 // ── SysTick ISR – fires at 11 kHz ─────────────────────────────────────────
 extern "C" void SysTick_Handler(void);
@@ -75,7 +76,6 @@ void Sound_Stop(void){
     DAC5_Out(0);
 }
 
-// ── Game sounds ────────────────────────────────────────────────────────────
 void Sound_Sad(void){
     SoundPt    = explosion;
     SoundCount = sizeof(explosion);
