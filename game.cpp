@@ -19,20 +19,26 @@ extern "C" {
 }
 
 // ── Sprite tables ──────────────────────────────────────────────────────────
-// Even index = whole, odd index = cut/exploded
+// selection[] pairs whole/cut sprites at even/odd indices.
+// When a fruit is sliced its type index is incremented by 1, switching
+// from the whole sprite to the cut sprite with no extra logic.
 static const unsigned short* selection[10] = {
-    wholestrawberry,  cutstrawberry,
-    wholewatermelon,  cutwatermelon,
-    wholepineapple,   cutpineapple,
-    wholepomegranate, cutpomegranate,
+    wholebluefish,  cutbluefish,
+    wholeorangefish,  cutorangefish,
+    wholejellyfish,   cutjellyfish,
+    wholegreenfish, cutgreenfish,
     bomb,             boom
 };
+// P[type] stores the pixel width (xp) and height (yp) of each sprite.
+// ST7735_DrawBitmap anchors y at the bottom of the image, so the top
+// pixel row sits at (y - yp + 1).  These dimensions must match the
+// actual array sizes declared in images.h.
 typedef struct { int16_t xp, yp; } FruitDim;
 static const FruitDim P[10] = {
-    {32,32},{51,32},   // 0-1  strawberry
-    {38,32},{35,35},   // 2-3  watermelon
-    {32,63},{34,38},   // 4-5  pineapple
-    {32,32},{42,31},   // 6-7  pomegranate
+    {48,14},{48,15},   // 0-1  bluefish
+    {36,30},{44,30},   // 2-3  watermelon
+    {20,35},{21,36},   // 4-5  pineapple
+    {33,30},{39,30},   // 6-7  pomegranate
     {32,48},{69,59}    // 8-9  bomb/boom
 };
 static const unsigned short* TitleLogos[1] = {titlecat4};
@@ -53,37 +59,42 @@ static const int16_t TitleLogoH[1] = { 63 };
 #define SLOWMO_FRAMES     90   // 3 s slow-motion
 
 typedef struct {
-    int16_t  x, y;          // DrawBitmap: y = bottom anchor
-    int16_t  vx, vy;
-    uint8_t  type;          // index into selection[] / P[]
-    bool     active;
-    bool     sliced;        // currently showing cut state
-    bool     wasVisible;    // only count a miss after the fruit has entered the screen
-    uint8_t  hitCount;      // total hits (miss-penalty and pom tracking)
-    uint8_t  deathTimer;    // countdown to removal
-    uint8_t  slicedTimer;   // pomegranate: frames until re-sliceable
-    const unsigned short* image;
+    int16_t  x, y;          // pixel position; y is the bottom anchor for DrawBitmap
+    int16_t  vx, vy;        // velocity in px/frame; vy positive = moving downward
+    uint8_t  type;          // index into selection[] and P[] (even=whole, odd=cut)
+    bool     active;        // false = slot is free and can be reused
+    bool     sliced;        // true once the player has hit this fruit
+    bool     wasVisible;    // set when the sprite's top edge enters the screen;
+                            // prevents penalizing a miss if the fruit never appeared
+    uint8_t  hitCount;      // incremented each time the cursor overlaps this fruit
+    uint8_t  deathTimer;    // counts down to 0, then sets active=false; used for
+                            // sliced fruits that linger and for the bomb explosion
+    const unsigned short* image; // pointer to the current sprite array (whole or cut)
 } Fruit_t;
 
 static Fruit_t Fruits[MAX_FRUITS];
 
 // ── Game-wide state ────────────────────────────────────────────────────────
-uint32_t          S;
-volatile uint32_t Semaphore;
+uint32_t          S;               // current FSM state index
+volatile uint32_t Semaphore;       // set to 1 by TIMG12 ISR at 30 Hz; main loop clears it
 uint8_t           CurrentLanguage = LANG_ENGLISH;
 
-static uint32_t PreviousState   = 0xFF;
+static uint32_t PreviousState   = 0xFF;   // detects state transitions in Game_UpdateFrame
 static uint32_t Score           = 0;
 static uint32_t HighScore       = 0;
 static uint8_t  Lives           = 3;
-static const uint8_t MENU_NONE  = 0xFF;
-static uint32_t LCD2ScoreShadow = 0xFFFFFFFF;
+static const uint8_t MENU_NONE  = 0xFF;   // sentinel: no menu item currently highlighted
+
+// LCD2 shadow values — track what was last drawn on LCD2 so we only
+// re-send over SPI when a value actually changes (SPI writes are slow).
+static uint32_t LCD2ScoreShadow = 0xFFFFFFFF;  // 0xFF… forces a full redraw on first frame
 static uint8_t  LCD2LivesShadow = 0xFF;
 static uint8_t  LCD2LevelShadow = 0xFF;
 static const uint8_t LCD2Enabled = 1;
-static uint8_t  LCD2MsgTimer   = 0;
+static uint8_t  LCD2MsgTimer   = 0;  // counts down frames until the event banner clears
 
-// Menu cursor shadow state
+// Menu highlight shadows — track the previously rendered selection so
+// only the changed button/option is redrawn (avoids full-screen flicker).
 static uint8_t prevSelection    = 0xFF;
 static uint8_t settingsSelection = 0xFF;
 static uint8_t languageSelection = 0xFF;
@@ -93,12 +104,13 @@ static uint8_t titleCursor      = MENU_NONE;
 static uint8_t settingsCursor   = MENU_NONE;
 static uint8_t languageCursor   = MENU_NONE;
 
-// Joystick cache & slow-mo
+// Joystick raw ADC readings (0-4095); initialized to mid-scale so the
+// cursor starts centered before the first Joystick_Read() call.
 static uint32_t JoyX = 2048, JoyY = 2048;
-static uint16_t SlowmoTimer = 0;
-static uint8_t  SlowmoFrame = 0;
-static uint8_t  GravCounter = 0;
-static uint16_t GameFrames  = 0;   // frames elapsed in current gameplay session
+static uint16_t SlowmoTimer = 0;  // remaining frames of slow-motion effect
+static uint8_t  SlowmoFrame = 0;  // frame counter within slow-mo (skips physics every 2/3)
+static uint8_t  GravCounter = 0;  // increments every frame; gravity applies on modulo
+static uint16_t GameFrames  = 0;  // frames elapsed this gameplay session (used by DifficultyLevel)
 
 // Display constants
 #define LCD1_WIDTH   160
@@ -116,7 +128,7 @@ static uint16_t GameFrames  = 0;   // frames elapsed in current gameplay session
 #define TITLE_SPRITE_Y   92   // bottom anchor of titlecat animation
 #define TITLE_BUTTON_ROW 11   // ST7735 text row for menu buttons
 
-// ── Cursor ────────────────────────────────────────────────────────────────
+//cursor stuff
 typedef struct {
     int16_t x, y;
     uint8_t radius;
@@ -130,15 +142,11 @@ static const int16_t CURSOR2_H = 19;
 static const int16_t CURSOR_MAX_HALF_W = CURSOR2_W / 2;
 static const int16_t CURSOR_MAX_HALF_H = CURSOR2_H / 2;
 
-// ── Forward declarations ───────────────────────────────────────────────────
 static void Title_RenderButton(uint8_t slot, uint8_t selected);
 static void Settings_RenderOption(uint8_t row, const char* label, uint8_t selected);
 static void Language_RenderOption(uint8_t row, const char* label, uint8_t selected);
 static void LCD2_UpdateGameplayStatus(void);
 static void LCD2_ShowEventMsg(const char* msg, uint16_t color, uint8_t frames);
-static void Gameplay_DrawBorder(void);
-static void Trail_Init(void);
-static void Trail_Update(void);
 static void Fruits_Draw(void);
 static void Fruit_Init(void);
 static void Fruit_Update(void);
@@ -148,7 +156,6 @@ static void Title_AnimateLogo(void);
 static void DrawBitmapMasked(int16_t x, int16_t y, const uint16_t *image, int16_t w, int16_t h);
 static uint8_t DifficultyLevel(void);
 
-// ── Inline helpers ─────────────────────────────────────────────────────────
 static const char* lang(const char* eng, const char* esp){
     return (CurrentLanguage == LANG_SPANISH) ? esp : eng;
 }
@@ -167,7 +174,7 @@ static int16_t MapAxis(uint32_t s, int16_t outMax){
     return (int16_t)(sc > (uint32_t)outMax ? (uint32_t)outMax : sc);
 }
 
-// ── LCD2 helpers ───────────────────────────────────────────────────────────
+// lcd2 stuff
 static void LCD2_UpdateGameplayStatus(void){
     if(!LCD2Enabled){ LCD1_Select(); return; }
     uint8_t lv = DifficultyLevel();
@@ -214,7 +221,7 @@ static void LCD2_TickEventMsg(void){
     }
 }
 
-// ── Cursor helpers ─────────────────────────────────────────────────────────
+// cursor help
 static int16_t Cursor_MaxY(void){
     if(S == S_TITLE)    return 118;
     if(S == S_SETTINGS) return 84;
@@ -226,6 +233,9 @@ static void Cursor_Reset(int16_t x, int16_t y){
     BladeCursor.y = y;
     BladeCursor.radius = (uint8_t)CURSOR_MAX_HALF_W;
 }
+// Switch_In() bit 0 = TOP button, 1 when held.  Slicing is active when
+// the button is NOT held (logical NOT), matching the hardware's active-low
+// inversion already applied inside Switch_In().
 static uint8_t Cursor_IsSlicing(void){
     return (uint8_t)(!(Switch_In() & 0x01u));
 }
@@ -233,15 +243,19 @@ static void Cursor_Sample(void){
     Joystick_Read(&JoyX, &JoyY);
     int16_t nx, ny;
     if(S == S_TITLE){
+        // Title: cursor locked to the button row (y fixed); only X moves.
         nx = Clamp16(MapAxis(JoyX, LCD1_WIDTH-1), CURSOR_MAX_HALF_W, LCD1_WIDTH-1-CURSOR_MAX_HALF_W);
         ny = 114;
     } else if(S == S_SETTINGS || S == S_LANGUAGE){
+        // Menu screens: cursor locked to center column; Y selects the option row.
         nx = 80;
         ny = (int16_t)(JoyY * 127 / 4095);
     } else {
+        // Gameplay: full 2-D cursor clamped to keep the sprite on-screen.
         nx = Clamp16(MapAxis(JoyX, LCD1_WIDTH-1), CURSOR_MAX_HALF_W, LCD1_WIDTH-1-CURSOR_MAX_HALF_W);
         ny = Clamp16(MapAxis(JoyY, LCD1_HEIGHT-1), CURSOR_MAX_HALF_H, Cursor_MaxY());
     }
+    // 2-pixel deadband suppresses jitter from ADC noise near the resting position.
     if(Abs16(nx - BladeCursor.x) >= 2) BladeCursor.x = nx;
     if(Abs16(ny - BladeCursor.y) >= 2) BladeCursor.y = ny;
 }
@@ -269,16 +283,6 @@ static void Cursor_Draw(void){
                          cursor1, CURSOR1_W, CURSOR1_H);
     }
 }
-// ── Slash trail ────────────────────────────────────────────────────────────
-static void Trail_Init(void){
-}
-static void Trail_Update(void){
-}
-
-// ── Gameplay border ────────────────────────────────────────────────────────
-static void Gameplay_DrawBorder(void){
-    LCD1_Select();
-}
 
 static uint8_t DifficultyLevel(void){
     // Level 0-9: rises by score (1 per 10 pts) or time (1 per 15 s), whichever is higher.
@@ -287,8 +291,9 @@ static uint8_t DifficultyLevel(void){
     uint8_t level = fromScore > fromTime ? fromScore : fromTime;
     return (level > 9U) ? 9U : level;
 }
+// Each frame, a new fruit is spawned with this percentage probability.
+// Ranges from 3% at level 0 to 21% at level 9 (linear ramp).
 static uint8_t Fruit_SpawnChance(void){
-    // Spawn probability per frame (%): 3 at level 0, up to 21 at level 9.
     return (uint8_t)(3U + DifficultyLevel() * 2U);
 }
 static uint8_t Fruit_ActiveCount(void){
@@ -298,22 +303,25 @@ static uint8_t Fruit_ActiveCount(void){
     }
     return count;
 }
+// Returns 1 if the candidate spawn position does not overlap any active fruit.
+// Bombs and boom sprites use a larger padding (14 px) because their explosion
+// sprites are bigger and visual overlap looks bad; regular fruit uses 6 px.
 static uint8_t Fruit_SpawnIsClear(uint8_t type, int16_t x, int16_t y){
     int16_t left = x;
     int16_t right = x + P[type].xp;
-    int16_t top = y - P[type].yp + 1;   
+    int16_t top = y - P[type].yp + 1;
     int16_t bottom = y;
     for(int i = 0; i < MAX_FRUITS; i++){
         if(!Fruits[i].active) continue;
         int16_t pad = ((type == FRUIT_BOMB) || (Fruits[i].type == FRUIT_BOMB) ||
                        (type == FRUIT_BOOM) || (Fruits[i].type == FRUIT_BOOM)) ? 14 : 6;
-        int16_t otherLeft = Fruits[i].x;
+        int16_t otherLeft  = Fruits[i].x;
         int16_t otherRight = Fruits[i].x + P[Fruits[i].type].xp;
-        int16_t otherTop = Fruits[i].y - P[Fruits[i].type].yp + 1;
+        int16_t otherTop   = Fruits[i].y - P[Fruits[i].type].yp + 1;
         int16_t otherBottom = Fruits[i].y;
         if((right + pad) < otherLeft || (otherRight + pad) < left) continue;
-        if((bottom + pad) < otherTop || (otherBottom + pad) < top) continue;
-        return 0;
+        if((bottom + pad) < otherTop  || (otherBottom + pad) < top) continue;
+        return 0;  // overlaps an existing fruit
     }
     return 1;
 }
@@ -324,93 +332,108 @@ static void Fruit_Init(void){
         Fruits[i].active = false; Fruits[i].sliced = false;
         Fruits[i].wasVisible = false;
         Fruits[i].hitCount = 0;   Fruits[i].deathTimer = 0;
-        Fruits[i].slicedTimer = 0;
     }
     GravCounter = 0; SlowmoTimer = 0; SlowmoFrame = 0; GameFrames = 0;
 }
 
 static void Fruit_Update(void){
-    if(GameFrames < 4500U) GameFrames++;   // cap at 2.5 min worth of frames
-    GravCounter++;
+    // Cap GameFrames so the difficulty ceiling (level 9) is reached at most
+    // after 4500 / 30 = 150 seconds and the counter never wraps.
+    if(GameFrames < 4500U) GameFrames++;
+    GravCounter++;   // global tick used as the gravity modulus clock
+
+    // Slow-motion: skip physics on 2 out of every 3 frames, making fruits
+    // appear to float.  SlowmoFrame tracks position within the 3-frame cycle.
     if(SlowmoTimer > 0){
         SlowmoTimer--;
         SlowmoFrame++;
-        if(SlowmoFrame % 3 != 0) return;  // only update physics every 3rd frame
+        if(SlowmoFrame % 3 != 0) return;
     }
+
     for(int i = 0; i < MAX_FRUITS; i++){
         if(!Fruits[i].active){
+            // ── Spawn attempt for this empty slot ────────────────────────
             uint8_t level = DifficultyLevel();
-            int16_t spawnY;
-            int16_t spawnX;
-            uint8_t t;
-            uint8_t placed = 0;
+
+            // Cap on-screen fruit count: starts at 3, adds one every 2 levels.
             if(Fruit_ActiveCount() >= (uint8_t)(2U + (level / 2U) + 1U)) continue;
+
+            // Probabilistic gate: most frames produce no new fruit.
             if((rand() % 100) >= Fruit_SpawnChance()) continue;
-            // Bomb probability scales from 3-in-20 at level 0 to 7-in-20 at level 9.
+
+            // Choose type: bombs scale from 3-in-20 at level 0 to 7-in-20 at level 9;
+            // pomegranates are always 2-in-20; remaining slots are regular fruit.
             uint8_t bombThresh = (uint8_t)(3U + level / 2U);
             int r = rand() % 20;
-            if     (r < (int)bombThresh) t = FRUIT_BOMB;
-            else if(r < (int)(bombThresh + 2)) t = FRUIT_POMEGRANATE;
-            else           t = (uint8_t)((rand() % 3) * 2);  // 0, 2, or 4
-            Fruits[i].type = t;
+            uint8_t t;
+            if     (r < (int)bombThresh)        t = FRUIT_BOMB;
+            else if(r < (int)(bombThresh + 2))  t = FRUIT_POMEGRANATE;  // pomo = 2 slots
+            else                                t = (uint8_t)((rand() % 3) * 2);  // 0, 2, or 4
+
+            Fruits[i].type  = t;
             Fruits[i].image = selection[t];
             int16_t sw = P[t].xp;
-            spawnY = (int16_t)(LCD1_HEIGHT + P[t].yp);
+
+            // Spawn just below the bottom edge so the fruit flies upward into view.
+            int16_t spawnY = (int16_t)(LCD1_HEIGHT + P[t].yp);
+            int16_t spawnX = 0;
+            uint8_t placed = 0;
             for(int tries = 0; tries < 10; tries++){
                 spawnX = (int16_t)(3 + rand() % (LCD1_WIDTH - sw - 6));
-                if(Fruit_SpawnIsClear(t, spawnX, spawnY)){
-                    placed = 1;
-                    break;
-                }
+                if(Fruit_SpawnIsClear(t, spawnX, spawnY)){ placed = 1; break; }
             }
-            if(!placed) continue;
-            Fruits[i].x = spawnX;
-            Fruits[i].y = spawnY;
-            Fruits[i].vy = (int16_t)(-(7 + rand() % 4 + level));  // faster launch at higher levels
+            if(!placed) continue;  // no clear spot found this frame; try again next frame
+
+            Fruits[i].x  = spawnX;
+            Fruits[i].y  = spawnY;
+            // Negative vy = upward velocity; magnitude grows with level for faster arcs.
+            Fruits[i].vy = (int16_t)(-(7 + rand() % 4 + level));
+            // Random lateral drift; range widens and bias shifts with level.
             Fruits[i].vx = (int16_t)((rand() % (5 + level)) - (2 + (level / 2)));
-            Fruits[i].active = true; Fruits[i].sliced = false; Fruits[i].wasVisible = false;
-            Fruits[i].hitCount = 0;  Fruits[i].deathTimer = 0; Fruits[i].slicedTimer = 0;
+            Fruits[i].active  = true;  
+            Fruits[i].sliced    = false;
+            Fruits[i].wasVisible = false;
+            Fruits[i].hitCount = 0;    
+            Fruits[i].deathTimer = 0;
             continue;
         }
-        // Death countdown (sliced fruit or bomb explosion)
+
+        // ── Death countdown (sliced fruit lingering or bomb explosion) ────
         if(Fruits[i].deathTimer > 0){
             Fruits[i].deathTimer--;
             if(Fruits[i].deathTimer == 0){
+                // Boom sprite's timer expiring is when the life penalty fires,
+                // giving the player a moment to see the explosion first.
                 if(Fruits[i].type == FRUIT_BOOM && Lives > 0) Lives--;
                 Fruits[i].active = false;
             }
-            if(Fruits[i].type == FRUIT_BOOM) continue;  // exploding bomb: freeze
+            if(Fruits[i].type == FRUIT_BOOM) continue;  // freeze position during explosion
         }
         if(!Fruits[i].active) continue;
 
-        // // Pomegranate re-slice timer
-        // if(Fruits[i].slicedTimer > 0){
-        //     Fruits[i].slicedTimer--;
-        //     if(Fruits[i].slicedTimer == 0 && Fruits[i].type == FRUIT_POMEGRANATE + 1){
-        //         Fruits[i].type   = FRUIT_POMEGRANATE;
-        //         Fruits[i].image  = selection[FRUIT_POMEGRANATE];
-        //         Fruits[i].sliced = false;
-        //     }
-        // }
-
-        // Gravity cadence tightens with difficulty: every 4th, 3rd, 2nd, or every frame.
+        // ── Physics ───────────────────────────────────────────────────────
+        // Apply +1 vy (downward acceleration) at a rate that tightens with difficulty:
+        // every 4th, 3rd, 2nd, or every frame for levels 0-2, 3-5, 6-7, 8-9.
         uint8_t lv = DifficultyLevel();
         uint8_t gravMod = (lv < 3u) ? 4u : (lv < 6u) ? 3u : (lv < 8u) ? 2u : 1u;
         if(GravCounter % gravMod == 0) Fruits[i].vy++;
         Fruits[i].x += Fruits[i].vx;
         Fruits[i].y += Fruits[i].vy;
 
-        // Wall bounce
+        // Reflect off left/right walls so fruits don't clip off the edges.
         if(Fruits[i].x < 2){ Fruits[i].x = 2; Fruits[i].vx = -Fruits[i].vx; }
         int16_t rx = (int16_t)(LCD1_WIDTH - 2 - P[Fruits[i].type].xp);
         if(Fruits[i].x > rx){ Fruits[i].x = rx; Fruits[i].vx = -Fruits[i].vx; }
 
-        // Fruit has entered the visible gameplay field at least once.
+        // Mark as visible once the sprite's top edge enters the screen area.
+        // wasVisible prevents penalizing a fruit that was spawned off-screen
+        // and fell back down before the player ever saw it.
         if((Fruits[i].y - P[Fruits[i].type].yp + 1) < LCD1_HEIGHT){
             Fruits[i].wasVisible = true;
         }
 
-        // Off-bottom: miss penalty for untouched fruit
+        // Miss detection: fruit fell below the bottom of the screen without being sliced.
+        // Bombs and booms are excluded — missing a bomb is not penalized.
         if(Fruits[i].wasVisible &&
            Fruits[i].y > LCD1_HEIGHT + P[Fruits[i].type].yp){
             if(Fruits[i].hitCount == 0 &&
@@ -421,23 +444,26 @@ static void Fruit_Update(void){
     }
 }
 
-// Scanline renderer: processes every screen row top-to-bottom.
-// Each row is cleared to white then immediately painted with all sprite and
-// cursor pixels that land on that row — so no row stays white for longer than
-// one row-width of SPI transfer time.  This eliminates the full-frame white
-// flash that a separate FillRect + DrawBitmap pass would produce.
+// DrawScanline renders one horizontal slice (row sy) of a sprite.
+// It is called from Fruits_Draw after the background row is already drawn,
+// so it only needs to write opaque sprite pixels — transparent pixels (0xFFFF)
+// are skipped and the background shows through.
+// Run-length merging: consecutive opaque pixels are batched into a single
+// ST7735_DrawBitmap call rather than one call per pixel, which is critical
+// because each SPI transaction has fixed overhead.
+// imgRow: bitmaps are stored bottom-up (row 0 = bottom), so row index is inverted.
 static void DrawScanline(int16_t sy,
                          const uint16_t *img, int16_t x,
                          int16_t top, int16_t w, int16_t h){
     if(sy < top || sy > top + h - 1) return;
-    int16_t imgRow = (h - 1) - (sy - top);
+    int16_t imgRow = (h - 1) - (sy - top);  // convert screen-top-down to image-bottom-up
     const uint16_t *rp = &img[imgRow * w];
     int16_t col = 0;
     while(col < w){
-        if(rp[col] == 0xFFFF){ col++; continue; }
+        if(rp[col] == 0xFFFF){ col++; continue; }  // skip transparent pixel
         int16_t rs = col;
-        while(col < w && rp[col] != 0xFFFF) col++;
-        ST7735_DrawBitmap(x + rs, sy, rp + rs, col - rs, 1);
+        while(col < w && rp[col] != 0xFFFF) col++;  // find end of opaque run
+        ST7735_DrawBitmap(x + rs, sy, rp + rs, col - rs, 1);  // send entire run at once
     }
 }
 
@@ -504,22 +530,27 @@ static void Fruits_Draw(void){
         // 3. Paint cursor pixels on this row (always on top)
         DrawScanline(sy, cimg, cx, ctop, cw, ch);
     }
-    Gameplay_DrawBorder();
 }
 
 static void Collision_Check(void){
-    if(Switch_In() & 0x01u) return;  // button released (active-low) → not slicing
+    // Slicing only while the top button is held (Switch_In() bit 0 = 1 means released).
+    if(Switch_In() & 0x01u) return;
     int sliceCount = 0;
     for(int i = 0; i < MAX_FRUITS; i++){
         if(!Fruits[i].active || Fruits[i].sliced) continue;
         int16_t fw = P[Fruits[i].type].xp, fh = P[Fruits[i].type].yp;
         int16_t cx = BladeCursor.x, cy = BladeCursor.y;
+        // M = 6-pixel hit margin makes slicing feel forgiving without being trivial.
         const int16_t M = 6;
         bool hit = (cx >= Fruits[i].x - M) && (cx <= Fruits[i].x + fw + M) &&
                    (cy >= Fruits[i].y - fh - M) && (cy <= Fruits[i].y + M);
         if(!hit) continue;
         Fruits[i].hitCount++;
         if(Fruits[i].type == FRUIT_BOMB){
+            // Slicing a bomb converts it to the boom (explosion) sprite, freezes it
+            // in place, and starts the EXPLODE_FRAMES death countdown.
+            // The life penalty fires when deathTimer reaches 0 (in Fruit_Update),
+            // not immediately, so the player sees the explosion first.
             Sound_Explosion();
             Lives--;
             Fruits[i].type = FRUIT_BOOM; Fruits[i].image = selection[FRUIT_BOOM];
@@ -527,22 +558,28 @@ static void Collision_Check(void){
             Fruits[i].vy = 0; Fruits[i].vx = 0;
             LCD2_ShowEventMsg(lang("HISS! -1 LIFE","SSSS! -1 VIDA"), 0x001Fu, 60);
         } else {
-            Fruits[i].type = Fruits[i].type + 1;   // whole → cut
+            // Increment type by 1 to switch from the whole sprite to its cut variant.
+            Fruits[i].type = Fruits[i].type + 1;
             Fruits[i].image = selection[Fruits[i].type];
             Fruits[i].sliced = true;
             Fruits[i].deathTimer = 0;
+            // Give the cut halves a small downward push proportional to entry speed.
             Fruits[i].vy = (int16_t)(2 + (Abs16(Fruits[i].vy) / 3));
             Sound_Slice();
             sliceCount++;
         }
     }
     if(sliceCount > 0){
-        Score += (uint32_t)(sliceCount * sliceCount);  // N² scoring
+        // N² scoring rewards multi-slices: 1 fruit = 1 pt, 2 = 4 pts, 3 = 9 pts.
+        Score += (uint32_t)(sliceCount * sliceCount);
         if(sliceCount == 2) LCD2_ShowEventMsg(lang("PURR-FECT x2!","PERFECTO x2! "), 0x07E0u, 55);
         else if(sliceCount >= 3) LCD2_ShowEventMsg(lang("PURR-FECT MEGA!","PERFECTO MEGA!"), 0x07FFu, 55);
     }
 }
 
+// Clears only the sprite zone (y = TITLE_TEXT_Y+1 to TITLE_SPRITE_Y) then
+// draws the logo centered horizontally.  Keeping the clear confined to the
+// sprite zone avoids erasing the "CAT NINJA" title text above it.
 static void Title_DrawLogo(uint8_t frame){
     int16_t w = TitleLogoW[frame], h = TitleLogoH[frame];
     int16_t x = (int16_t)((LCD1_WIDTH - w) / 2);
@@ -740,15 +777,14 @@ void Credits_Init(void){
 void Gameplay_Init(void){
     Sound_Stop();
     LCD1_Select(); ST7735_FillScreen(WOOD_DARK);
-    // Only reset score/lives on a fresh start; preserve them when resuming from pause.
+    // Resuming from pause must not reset score or lives; only a fresh start should.
     if(PreviousState != (uint32_t)S_PAUSED){
         Score = 0; Lives = 3;
         LED_SetLives(3);
     }
     Cursor_Reset(80, 64);
-    Trail_Init();
-    Fruit_Init();
-    Gameplay_DrawBorder();
+    Fruit_Init();      // clears all fruit slots and resets GameFrames / GravCounter
+    // Invalidate LCD2 shadow values so LCD2_UpdateGameplayStatus forces a full redraw.
     LCD2ScoreShadow = 0xFFFFFFFFu; LCD2LivesShadow = 0xFF;
     LCD2LevelShadow = 0xFF; LCD2MsgTimer = 0;
     LCD2_UpdateGameplayStatus();
@@ -795,6 +831,11 @@ void GameOver_Init(void){
 
 // ─────────────────────────────────────────────────────────────────────────
 // FSM TABLE
+// Next[input] index semantics (returned by each *_Input function):
+//   0 = no action (stay in current state)
+//   1 = primary action  (select / resume / back)
+//   2 = secondary action (game-over trigger, pause→resume)
+//   3 = tertiary action  (back-to-title shortcut)
 // ─────────────────────────────────────────────────────────────────────────
 State_t FSM[8] = {
     { &Title_Init,        { S_TITLE,        S_INSTRUCTIONS, S_SETTINGS, S_GAMEPLAY }},
@@ -809,8 +850,13 @@ State_t FSM[8] = {
 
 // ─────────────────────────────────────────────────────────────────────────
 // INPUT FUNCTIONS
+// Each function returns the FSM Next[] index for this frame (0 = no change).
+// Switch_Pressed() is edge-triggered (fires only on the first frame the
+// button transitions from released to pressed) so a held button does not
+// keep triggering state transitions on every frame.
 // ─────────────────────────────────────────────────────────────────────────
 static uint32_t Title_Input(void){
+    // titleCursor + 1 maps: INFO→1 (S_INSTRUCTIONS), SETTINGS→2, PLAY→3 (S_GAMEPLAY).
     if(titleCursor != MENU_NONE && Switch_Pressed(TOP_BUTTON)) return titleCursor + 1;
     return 0;
 }
@@ -819,14 +865,15 @@ static uint32_t Back_Input(void){
     return 0;
 }
 static uint32_t Settings_Input(void){
-    if(Switch_Pressed(BOTTOM_BUTTON)) return 3;
+    if(Switch_Pressed(BOTTOM_BUTTON)) return 3;  // bottom = back to title
     if(settingsCursor != MENU_NONE && Switch_Pressed(TOP_BUTTON)) return settingsCursor + 1;
     return 0;
 }
 static uint32_t Language_Input(void){
-    if(Switch_Pressed(BOTTOM_BUTTON)) return 1;
+    if(Switch_Pressed(BOTTOM_BUTTON)) return 1;  // bottom = back to settings
     if(languageCursor != MENU_NONE && Switch_Pressed(TOP_BUTTON)){
-        CurrentLanguage = languageCursor; return 1;
+        CurrentLanguage = languageCursor;  // commit selection before leaving
+        return 1;
     }
     return 0;
 }
@@ -835,13 +882,13 @@ static uint32_t Credits_Input(void){
     return 0;
 }
 static uint32_t Gameplay_Input(void){
-    if(Lives == 0) return 2;
-    if(Switch_Pressed(BOTTOM_BUTTON)) return 1;
+    if(Lives == 0) return 2;               // automatic transition to game-over
+    if(Switch_Pressed(BOTTOM_BUTTON)) return 1;  // manual pause
     return 0;
 }
 static uint32_t Pause_Input(void){
-    if(Switch_Pressed(BOTTOM_BUTTON)) return 1;
-    if(Switch_Pressed(TOP_BUTTON))    return 3;
+    if(Switch_Pressed(BOTTOM_BUTTON)) return 1;  // resume gameplay
+    if(Switch_Pressed(TOP_BUTTON))    return 3;  // quit to title
     return 0;
 }
 
@@ -868,36 +915,41 @@ uint32_t Game_GetInput(void){
 }
 
 void Game_UpdateFrame(void){
+    // Sample joystick every frame regardless of state so the cursor is always
+    // responsive; each state interprets the axes differently (see Cursor_Sample).
     Cursor_Sample();
 
+    // State-change detection: InitPt runs exactly once per transition to repaint
+    // the screen for the new state.  LCD2 reaction sprite also updates here.
     if(S != PreviousState){
         (FSM[S].InitPt)();
         {
+            // excited_cat plays during active gameplay/menus; sleeping_cat signals
+            // paused or game-over so the player gets a visual cue on the second screen.
             const unsigned short *img = excited_cat; int16_t w=89, h=65;
-            if(S == S_PAUSED)       { img=sleeping_cat; w=100; }
-            else if(S == S_GAMEOVER){ img=sleeping_cat;  w=100; }
+            if(S == S_PAUSED)        { img = sleeping_cat; w = 100; }
+            else if(S == S_GAMEOVER) { img = sleeping_cat; w = 100; }
             LCD2_ShowReaction(img, w, h);
         }
-        LCD1_Select();
+        LCD1_Select();   // always return SPI mux to LCD1 after LCD2 writes
         PreviousState = S;
     }
 
-    Cursor_UpdateColor();
+    Cursor_UpdateColor();  // red = slicing, yellow = hovering selectable, cyan = idle
 
     if(S == S_TITLE){
-        Title_AnimateLogo();
-        Title_HighlightMenu();
+        Title_AnimateLogo();     // no-op (single frame); kept for structural symmetry
+        Title_HighlightMenu();   // redraws button labels only when selection changes
     } else if(S == S_SETTINGS){
         Settings_Highlight();
     } else if(S == S_LANGUAGE){
         Language_Highlight();
     } else if(S == S_GAMEPLAY){
-        Fruit_Update();
-        Collision_Check();
-        Fruits_Draw();      // scanline: clear+fruits+cursor in one top-to-bottom pass
-        Trail_Update();
-        LED_SetLives(Lives);
-        LCD2_UpdateGameplayStatus();
-        LCD2_TickEventMsg();
+        Fruit_Update();          // physics, spawning, miss detection
+        Collision_Check();       // hit test cursor against all active fruits
+        Fruits_Draw();           // scanline pass: background + fruits + cursor, no tear
+        LED_SetLives(Lives);     // update the 3 PCB LEDs to reflect current life count
+        LCD2_UpdateGameplayStatus();  // push score/level to LCD2 only if they changed
+        LCD2_TickEventMsg();          // count down and clear the event banner on LCD2
     }
 }
