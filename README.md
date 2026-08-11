@@ -45,7 +45,7 @@ Cat Ninja is a fully custom embedded gaming handheld built around the TI MSPM0 m
 - DAC output driver for sound playback
 ## Team
  
-Built by Keerthana Mangalpally and [Partner's Name] for ECE319H at UT Austin.
+Built by Keerthana Mangalpally and Kaitlyn Chen for ECE319H at UT Austin.
  
 ## Acknowledgments & License
  
